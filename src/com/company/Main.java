@@ -10,6 +10,8 @@ import javax.json.JsonReader;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -21,6 +23,8 @@ public class Main {
 
     private static final String FILE = "/home/frederick/Desktop/data.xlsx";
     private static final String FILE_OUT = "/home/frederick/Desktop/data2.xlsx";
+    private static final String MODDED_FILE = "/home/frederick/Desktop/data2.xlsx";
+
     private static final String OUT_DIR = "/home/frederick/Desktop/";
 
 
@@ -44,9 +48,14 @@ public class Main {
     public static HashMap<String, List<String>> translations = new HashMap<>();
 
 
-    public static void main(String... args) throws IOException, InvalidFormatException {
-        Workbook wb = WorkbookFactory.create(new File(FILE));
+    public static void main(String... args) throws IOException, InvalidFormatException, NoSuchAlgorithmException {
+        translate();
 
+        createLocalFilesFromModdedTranslations();
+    }
+
+    private static void translate() throws IOException, InvalidFormatException, NoSuchAlgorithmException {
+        Workbook wb = WorkbookFactory.create(new File(FILE));
 
         Holder dataPair = getDataPairs(wb);
 
@@ -67,8 +76,6 @@ public class Main {
             }
 
             translations.put(locale, translated);
-
-
         }
 
         insertData(wb, translations, dataPair.locales, dataPair.words);
@@ -76,8 +83,14 @@ public class Main {
         wb.write(fileOut);
         fileOut.close();
 
-        createLocaleFiles(dataPair.locales, dataPair.words, translations);
-        createEnLocaleFile(dataPair.words);
+        //createLocaleFiles(dataPair.locales, dataPair.words, translations);
+        //createEnLocaleFile(dataPair.words);
+    }
+
+    private static void createLocalFilesFromModdedTranslations() throws IOException, InvalidFormatException, NoSuchAlgorithmException {
+        Workbook wb = WorkbookFactory.create(new File(MODDED_FILE));
+        TranslationsHolder dataPairs = getDataPairsTranslated(wb);
+        createLocaleFiles(dataPairs.locales, dataPairs.translations.get("en"), dataPairs.translations);
     }
 
     /**
@@ -86,13 +99,13 @@ public class Main {
      * @param english
      * @throws IOException
      */
-    private static void createEnLocaleFile(List<String> english) throws IOException {
+    private static void createEnLocaleFile(List<String> english) throws IOException, NoSuchAlgorithmException {
         FileOutputStream ous = new FileOutputStream(OUT_DIR + "en.yml");
         OutputStreamWriter writer = new OutputStreamWriter(ous);
         writer.append("en:\n");
 
         for (String translation : english) {
-            writer.append(" " + createTag(translation) + ": '" + translation + "'\n");
+            writer.append(" " + createMD5Tag(translation) + ": '" + translation + "'\n");
         }
 
         writer.flush();
@@ -101,7 +114,7 @@ public class Main {
         ous.close();
     }
 
-    private static void createLocaleFiles(List<String> locales, List<String> english, HashMap<String, List<String>> translations) throws IOException {
+    private static void createLocaleFiles(List<String> locales, List<String> english, HashMap<String, List<String>> translations) throws IOException, NoSuchAlgorithmException {
 
         for (String locale : locales) {
             FileOutputStream ous = new FileOutputStream(OUT_DIR + locale + ".yml");
@@ -110,7 +123,7 @@ public class Main {
 
             int i = 0;
             for (String translation : translations.get(locale)) {
-                writer.append(" " + createTag(english.get(i)) + ": '" + translation + "'\n");
+                writer.append(" " + createMD5Tag(english.get(i)) + ": '" + translation + "'\n");
                 i++;
             }
 
@@ -122,16 +135,17 @@ public class Main {
 
     }
 
-    private static void insertData(Workbook wb, HashMap<String, List<String>> translations, List<String> locales, List<String> english) {
+    private static void insertData(Workbook wb, HashMap<String, List<String>> translations, List<String> locales, List<String> english) throws NoSuchAlgorithmException {
 
         for (Sheet sheet : wb) {
             int i = 0;
             for (Row row : sheet) {
                 if (row.getRowNum() > DEF_TRANSLATIONS_ROW) {
+                    if (i == translations.get("fr").size()) break;
                     for (String locale : locales) {
                         //get each locale, fetch translation for locale and add to appropriate column
                         createCell(row, locales.indexOf(locale) + OFFSET, translations.get(locale).get(i));
-                        createCell(row, 0, createTag(english.get(i)));
+                        createCell(row, 0, createMD5Tag(english.get(i)));
 
                     }
                     i++;
@@ -141,6 +155,13 @@ public class Main {
         }
     }
 
+    /**
+     * prefer to use create md5 tag to avoid conflicts for large dictonaries
+     *
+     * @param title
+     * @return
+     */
+    @Deprecated
     private static String createTag(String title) {
         if (title.length() > 10) {
             title = title.substring(0, 10);
@@ -148,9 +169,51 @@ public class Main {
         return title.toLowerCase().replace(" ", "_");
     }
 
+    private static String createMD5Tag(String title) throws NoSuchAlgorithmException {
+        return toHexString(MessageDigest.getInstance("MD5").digest(title.toLowerCase().getBytes()));
+    }
+
+    public static String toHexString(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (int i = 0; i < bytes.length; i++) {
+            String hex = Integer.toHexString(0xFF & bytes[i]);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+
     private static void createCell(Row row, int column, String value) {
         Cell cell = row.createCell(column);
         cell.setCellValue(value);
+    }
+
+    private static TranslationsHolder getDataPairsTranslated(Workbook wb) throws IOException, InvalidFormatException {
+
+        HashMap<String, List<String>> translations = new HashMap<>();
+        List<String> locales = new ArrayList<>();
+
+        for (Sheet sheet : wb) {
+            for (Row row : sheet) {
+                for (Cell cell : row) {
+                    cell.getColumnIndex();
+
+                    if (cell.getColumnIndex() >= WORDS_EN_COLUMN && row.getRowNum() > DEF_TRANSLATIONS_ROW) {
+                        translations.get(locales.get(cell.getColumnIndex() - 1)).add(cell.getStringCellValue());
+                    }
+
+                    //this will go first as cells are iterated left ro right
+                    if (row.getRowNum() == ICUCODES_ROW && cell.getColumnIndex() >= WORDS_EN_COLUMN) {
+                        locales.add(cell.getStringCellValue());
+                        translations.put(cell.getStringCellValue(), new ArrayList<>());
+                    }
+                }
+            }
+        }
+
+        return new TranslationsHolder(translations, locales);
     }
 
     private static Holder getDataPairs(Workbook wb) throws IOException, InvalidFormatException {
@@ -169,12 +232,12 @@ public class Main {
                     //get list of english words
                     if (cell.getColumnIndex() == WORDS_EN_COLUMN && row.getRowNum() > DEF_TRANSLATIONS_ROW) {
                         words.add(cell.getStringCellValue());
-                        System.out.println("added: " + cell.getStringCellValue());
+                        //System.out.println("added: " + cell.getStringCellValue());
                     }
                     //translate to each locale
                     //append to locale cell
                     if (row.getRowNum() == ICUCODES_ROW && cell.getColumnIndex() > WORDS_EN_COLUMN) {
-                        System.out.println("icu code: " + cell.getStringCellValue());
+                        //System.out.println("icu code: " + cell.getStringCellValue());
                         locales.add(cell.getStringCellValue());
                     }
                 }
@@ -187,7 +250,12 @@ public class Main {
     private static String buildUrl(List<String> data, String locale) throws UnsupportedEncodingException {
         String result = "&target=" + locale;
 
+        int i = 0;
+        List<String> older = data.subList(60, data.size());
         for (String s : data) {
+            if (i == 67)
+                break;
+            //i++;
             result += "&q=" + s;
         }
         System.out.println(result);
@@ -235,5 +303,15 @@ public class Main {
         }
 
 
+    }
+
+    private static class TranslationsHolder {
+        HashMap<String, List<String>> translations;
+        List<String> locales;
+
+        public TranslationsHolder(HashMap<String, List<String>> translations, List<String> locales) {
+            this.translations = translations;
+            this.locales = locales;
+        }
     }
 }
